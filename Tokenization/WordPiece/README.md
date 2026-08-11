@@ -1,495 +1,591 @@
-# Unigram
+# WordPiece
 
-## 1. What is Unigram?
+## 1. What is WordPiece?
 
-Unigram is a **subword tokenization algorithm** used in models and tokenization systems such as SentencePiece.
+WordPiece is a **subword tokenization algorithm** used famously in BERT.
 
-Unlike BPE and WordPiece, Unigram does **not build the vocabulary by merging pairs**.
-
-Instead, it starts with a **large vocabulary of candidate subwords** and gradually removes the least useful ones.
+Like BPE, it starts with small tokens and builds larger subwords. The main difference is **how it chooses the pair to merge**.
 
 ### Core idea
 
-> **Start big → evaluate tokens → remove weak tokens → repeat.**
+> **Start with small tokens, calculate a score for each adjacent pair, then merge the pair with the highest score.**
+
+The score is:
+
+```text id="5v7q2m"
+                 Frequency(A, B)
+Score = ─────────────────────────────────
+         Frequency(A) × Frequency(B)
+```
+
+So unlike BPE, the most frequent pair is **not necessarily** the best pair.
 
 ---
 
 # 2. Training Architecture
 
-```text id="v7m2k9"
+```text id="9j1p4a"
                 Training Corpus
                        │
                        ▼
-                Build Candidates
+                Pre-tokenization
                        │
                        ▼
-              Initial Large Vocabulary
+                 Word Frequencies
                        │
                        ▼
-                Assign Probabilities
+                Initial Vocabulary
                        │
                        ▼
-              Find Best Segmentations
+              Initial WordPiece Splits
                        │
                        ▼
-                  Calculate Loss
+             Token & Pair Frequencies
                        │
                        ▼
-              Evaluate Token Importance
+                Calculate Scores
                        │
                        ▼
-                Remove Weak Tokens
+              Highest-Scoring Pair
                        │
                        ▼
-               Update Probabilities
+                    Merge
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+       Add New Token      Update Splits
+              │                 │
+              └────────┬────────┘
+                       ▼
+                 Repeat Loop
                        │
                        ▼
-                  Repeat Loop
-                       │
-                       ▼
-              Final Vocabulary
+              Target Vocabulary
 ```
 
 ---
 
 # 3. Training Pipeline
 
-### 1. Build Initial Vocabulary
+### 1. Pre-tokenization
 
-Unlike BPE and WordPiece, Unigram starts with **many candidate subwords**.
+The corpus is first split into words.
 
-For example, for:
-
-```text id="a8n4p2"
-playing
+```text id="4r8y9c"
+"This is WordPiece."
+↓
+"This" "is" "WordPiece" "."
 ```
 
-possible candidates could include:
+### 2. Word Frequencies
 
-```text id="q3m7x1"
-p
-pl
-pla
-play
-playing
-lay
-ing
-...
+Count how often every word appears.
+
+```text id="k9h6u1"
+hug  → 10
+pug  → 5
+pun  → 12
+bun  → 4
+hugs → 5
 ```
 
-The initial vocabulary is intentionally larger than the final vocabulary.
+### 3. Initial Vocabulary
 
----
+WordPiece starts from the characters in the corpus.
 
-### 2. Assign Probabilities
+But it distinguishes between:
 
-Each candidate token gets a probability.
+* Characters at the beginning of a word
+* Characters inside a word
+
+Continuation characters get the `##` prefix.
 
 For example:
 
-```text id="k5v9r2"
-play → probability
-ing  → probability
-p    → probability
-lay  → probability
+```text id="q7d3kp"
+hug
+↓
+h ##u ##g
 ```
 
-These probabilities describe how likely the tokens are in the corpus.
+So the vocabulary can contain:
+
+```text id="1q0v8c"
+h
+##u
+##g
+```
+
+Special tokens such as:
+
+```text id="g6b2pl"
+[PAD] [UNK] [CLS] [SEP] [MASK]
+```
+
+can also be added.
 
 ---
 
-### 3. Find Possible Segmentations
+# 4. Initial Splits
 
-A word can be split in different ways.
+Every word starts as individual WordPiece tokens.
+
+For example:
+
+```text id="6h4s9q"
+hug
+→ [h, ##u, ##g]
+
+hugs
+→ [h, ##u, ##g, ##s]
+```
+
+The `##` means:
+
+> **This token is a continuation of the same word.**
+
+---
+
+# 5. Calculate Pair Scores
+
+WordPiece looks at every adjacent pair.
 
 For:
 
-```text id="w2x7m4"
-playing
+```text id="4z3v1n"
+[h, ##u, ##g]
 ```
 
-possible segmentations could be:
+the pairs are:
 
-```text id="c8n3q6"
-playing
-
-play + ing
-
-p + lay + ing
+```text id="v4m7t8"
+(h, ##u)
+(##u, ##g)
 ```
 
-Unigram evaluates these different possibilities.
+For each pair we calculate:
+
+```text id="b2q8n0"
+                 Pair Frequency
+Score = ─────────────────────────────────
+         Frequency(A) × Frequency(B)
+```
+
+The idea is that a pair should not get a high score **just because its individual tokens are extremely common**.
+
+So WordPiece considers both:
+
+```text id="0pl5xw"
+How often the pair appears
++
+How common its individual parts are
+```
 
 ---
 
-### 4. Find the Best Segmentation
+# 6. Select the Best Pair
 
-The probability of a segmentation is based on the probabilities of its tokens.
+After calculating all scores, WordPiece selects:
 
-Conceptually:
+> **The pair with the highest score.**
 
-```text id="r6m2v8"
-P(play + ing)
-=
-P(play) × P(ing)
+For example:
+
+```text id="8z3j1n"
+(h, ##u)       → 1/36
+(##u, ##g)     → 1/36
+(##g, ##s)     → 1/20
 ```
 
-In practice, log probabilities are commonly used.
+The highest score is:
 
-The tokenizer chooses the segmentation with the highest probability.
+```text id="t5f7j2"
+(##g, ##s)
+```
+
+so that pair is selected.
+
+This is the main difference from BPE:
+
+```text id="1q6m4x"
+BPE
+→ highest frequency
+
+WordPiece
+→ highest score
+```
 
 ---
 
-# 4. Main Training Loop
+# 7. Merge the Pair
 
-The main Unigram loop is different from BPE and WordPiece.
+Suppose the selected pair is:
 
-```text id="k4p8m2"
-while vocabulary > target_size:
-
-    Find best segmentations
-
-    Calculate model loss
-
-    Evaluate token importance
-
-    Remove least useful tokens
-
-    Update probabilities
+```text id="w4n9p2"
+(##g, ##s)
 ```
 
-So the main idea is:
+It becomes:
 
-```text id="x7q3n9"
-Evaluate
-   ↓
-Prune
-   ↓
+```text id="2x6c8v"
+##gs
+```
+
+Notice that the `##` prefix is kept only once.
+
+For example:
+
+```text id="a8f4m3"
+h ##u ##g ##s
+```
+
+becomes:
+
+```text id="v6k2q9"
+h ##u ##gs
+```
+
+The new token is added to the vocabulary.
+
+---
+
+# 8. Update the Splits
+
+After the merge, all affected word splits are updated.
+
+Before:
+
+```text id="q5t7n1"
+h ##u ##g ##s
+```
+
+After:
+
+```text id="z8r3m4"
+h ##u ##gs
+```
+
+The next iteration uses these updated splits to calculate new frequencies and scores.
+
+---
+
+# 9. Main Training Loop
+
+The entire WordPiece training loop can be summarized as:
+
+```text id="k2m8x4"
+while vocabulary < target_size:
+
+    Calculate pair scores
+
+    Find highest-scoring pair
+
+    Merge the pair
+
+    Add new token to vocabulary
+
+    Update word splits
+```
+
+So:
+
+```text id="n7q1b5"
+Calculate
+    ↓
+Select
+    ↓
+Merge
+    ↓
 Update
-   ↓
+    ↓
 Repeat
 ```
 
-### Important difference
-
-BPE / WordPiece:
-
-```text id="n2m6v8"
-Small → Bigger
-```
-
-Unigram:
-
-```text id="q5r9k3"
-Large → Smaller
-```
+The difference from BPE is mainly the **selection step**.
 
 ---
 
-# 5. Why Does It Remove Tokens?
+# 10. Important Implementation Parts
 
-Suppose the vocabulary contains:
+### `word_freqs`
 
-```text id="v8m3q1"
-play
-playing
-ing
+Stores the frequency of every word.
+
+```text id="v3q8n2"
+hug → 10
+pug → 5
 ```
 
-If the model can already represent:
+### `splits`
 
-```text id="z4k7n2"
-playing
+Stores the current WordPiece representation.
+
+Initially:
+
+```text id="r4x9m1"
+hug → [h, ##u, ##g]
 ```
 
-very well using:
+After merging:
 
-```text id="c6p9x3"
-play + ing
+```text id="d7k2p5"
+hug → [hu, ##g]
 ```
 
-then the token:
+### `compute_pair_scores()`
 
-```text id="a2m5r8"
-playing
-```
+Calculates:
 
-may not be necessary.
-
-Removing it may have very little effect on the model.
-
-So Unigram tries to keep tokens that are actually useful.
-
----
-
-# 6. Token Importance
-
-To decide which tokens to remove, Unigram estimates how much the model would suffer if a token disappeared.
+* Individual token frequencies
+* Pair frequencies
+* Score for every pair
 
 Conceptually:
 
-```text id="m7q2v5"
-Current Loss
-     ↓
-Remove token
-     ↓
-New Loss
-     ↓
-Compare
-```
-
-If removing a token causes almost no change:
-
-```text id="k3n8x1"
-Token → not very important
-```
-
-If removing it causes a large increase in loss:
-
-```text id="r6p2m9"
-Token → important
-```
-
-The least useful tokens become candidates for removal.
-
----
-
-# 7. Pruning
-
-The process of removing weak tokens is called **pruning**.
-
-For example:
-
-```text id="x5m8q2"
-10,000 candidates
-       ↓
-Pruning
-       ↓
-8,000
-       ↓
-Pruning
-       ↓
-6,000
-       ↓
-Pruning
-       ↓
-4,000
-       ↓
-Final Vocabulary
-```
-
-The exact sizes depend on the tokenizer configuration.
-
-The important idea is:
-
-> **Unigram gradually removes unnecessary tokens until the desired vocabulary size is reached.**
-
----
-
-# 8. Finding the Best Segmentation
-
-A word can have many possible segmentations.
-
-For example:
-
-```text id="n4q8m2"
-playing
-```
-
-could be:
-
-```text id="v5x2p7"
-playing
-```
-
-or:
-
-```text id="c9m3k6"
-play + ing
-```
-
-or:
-
-```text id="r2q7n4"
-p + lay + ing
-```
-
-Checking every possible segmentation would be expensive.
-
-So Unigram uses a **dynamic programming approach**, commonly implemented with the **Viterbi algorithm**, to find the best path efficiently.
-
-Conceptually:
-
-```text id="m8q3v1"
-Possible Tokens
+```text id="y5m3q8"
+Count tokens
       ↓
-Possible Paths
+Count pairs
       ↓
-Calculate Best Score
-      ↓
-Best Path
-      ↓
-Final Segmentation
+Calculate score
+```
+
+### `merge_pair()`
+
+Applies the selected merge to the current word splits.
+
+```text id="p4x7n2"
+[h, ##u, ##g]
+```
+
+merge:
+
+```text id="m8q1v6"
+(h, ##u)
+```
+
+becomes:
+
+```text id="c3z5r9"
+[hu, ##g]
 ```
 
 ---
 
-# 9. Tokenization Pipeline
+# 11. Tokenization Pipeline
 
-After training, the tokenizer has:
+Training and tokenization work differently.
 
-```text id="q6m2x8"
-Final Vocabulary
-+
-Token Probabilities
-```
+After training, WordPiece keeps the **final vocabulary**.
 
-For a new word:
+To tokenize a new word:
 
-```text id="v3n7p5"
+```text id="j6w2k8"
 New Word
    ↓
-Find possible vocabulary pieces
+Start from the beginning
    ↓
-Build possible segmentations
+Find the longest vocabulary token
    ↓
-Calculate probabilities
+Split it
    ↓
-Viterbi / Best Path
+Search for the longest continuation token
    ↓
-Final Tokens
+Repeat
+   ↓
+Complete word?
 ```
+
+The key idea is:
+
+> **WordPiece uses a longest-match strategy.**
 
 ---
 
-# 10. Example
+# 12. Example — `hugs`
 
 Suppose the vocabulary contains:
 
-```text id="m7x2q9"
-play
-playing
-ing
-p
-lay
+```text id="r5q8m2"
+hug
+hu
+##g
+##s
+##gs
 ```
 
-For:
+Start with:
 
-```text id="r4n8k1"
-playing
+```text id="n3v7x1"
+hugs
 ```
 
-possible segmentations include:
+Possible matches at the beginning:
 
-```text id="c6v2m5"
-playing
+```text id="q8m4k2"
+h
+hu
+hug
 ```
 
-```text id="q9x3p7"
-play + ing
+The longest valid match is:
+
+```text id="a5x9p3"
+hug
 ```
 
-```text id="n5k8r2"
-p + lay + ing
+So:
+
+```text id="z7c2n6"
+hugs
+→ hug + s
 ```
 
-The model compares their probabilities and chooses the best segmentation.
+The remaining part becomes a continuation:
 
-So unlike WordPiece, Unigram does **not simply choose the longest token**.
-
----
-
-# 11. Important Implementation Parts
-
-### Candidate Vocabulary
-
-Contains the initial large set of possible subwords.
-
-```text id="x8m3q5"
-p
-pl
-pla
-play
-playing
-ing
-...
+```text id="f4m8q1"
+##s
 ```
 
-### Probabilities
+Therefore:
 
-Each candidate token has a probability.
-
-These probabilities are updated during training.
-
-### Segmentation
-
-Finds the best way to represent each word using the current vocabulary.
-
-### Loss
-
-Measures how well the current vocabulary represents the training corpus.
-
-### Pruning
-
-Removes tokens that contribute the least.
-
-### Training Loop
-
-Repeatedly:
-
-```text id="q4n7m2"
-Find best segmentations
-→ calculate loss
-→ evaluate tokens
-→ remove weak tokens
-→ update
+```text id="w6r3t9"
+hugs
+→ ["hug", "##s"]
 ```
 
 ---
 
-# 12. BPE vs WordPiece vs Unigram
+# 13. `[UNK]` Behavior
 
-|                | BPE                | WordPiece            | Unigram             |
-| -------------- | ------------------ | -------------------- | ------------------- |
-| Starting point | Small vocabulary   | Small vocabulary     | Large vocabulary    |
-| Training       | Merge              | Merge                | Prune               |
-| Main decision  | Most frequent pair | Highest-scoring pair | Least useful tokens |
-| Vocabulary     | Grows              | Grows                | Shrinks             |
-| Tokenization   | Merge rules        | Longest match        | Best probability    |
-| Main idea      | Frequency          | Score                | Probability         |
+WordPiece requires the **whole word** to be tokenizable.
+
+Suppose:
+
+```text id="q3m7x9"
+bum
+```
+
+can start with:
+
+```text id="j8k2p4"
+b
+##u
+```
+
+but there is no valid token for:
+
+```text id="v5n1r6"
+##m
+```
+
+WordPiece does not return:
+
+```text id="z4c8t2"
+[b, ##u, [UNK]]
+```
+
+Instead, the entire word becomes:
+
+```text id="m6q9w3"
+[UNK]
+```
+
+So:
+
+```text id="y7p2k5"
+Complete word can be represented
+→ return tokens
+
+Cannot complete the word
+→ [UNK]
+```
 
 ---
 
-# 13. Key Takeaways
+# 14. BPE vs WordPiece
 
-* Unigram is a **subword tokenizer**.
-* It starts with a relatively large candidate vocabulary.
-* Each token has a probability.
-* Words can have multiple possible segmentations.
-* The model finds the most probable segmentation.
-* Unigram evaluates how useful each token is.
-* The least useful tokens are removed.
-* This pruning process repeats until the target vocabulary size.
-* Viterbi/dynamic programming is used to efficiently find the best segmentation.
-* Unlike BPE and WordPiece, Unigram **shrinks the vocabulary instead of growing it**.
+The training process looks similar:
+
+```text id="h2k7m4"
+Initial Vocabulary
+       ↓
+Find Pair
+       ↓
+Merge
+       ↓
+Update
+       ↓
+Repeat
+```
+
+But the pair selection is different.
+
+### BPE
+
+```text id="x5q8m2"
+Most frequent pair
+```
+
+### WordPiece
+
+```text id="p3n7r1"
+Highest-scoring pair
+```
+
+WordPiece score:
+
+```text id="k9v2d6"
+                 Pair Frequency
+Score = ─────────────────────────────────
+         Frequency(A) × Frequency(B)
+```
+
+And tokenization is also different:
+
+```text id="z4m8q1"
+BPE
+→ Apply learned merge rules
+
+WordPiece
+→ Longest vocabulary match
+```
+
+---
+
+# 15. Key Takeaways
+
+* WordPiece is a **subword tokenizer**.
+* It starts with characters and builds larger subwords.
+* Continuation tokens use the `##` prefix.
+* It calculates a score for every adjacent pair.
+* The **highest-scoring pair** is merged.
+* The vocabulary grows after every merge.
+* The process repeats until the target vocabulary size.
+* During tokenization, WordPiece uses the **longest matching subword**.
+* If a word cannot be completely represented, it becomes `[UNK]`.
+* The main training loop is:
+
+```text id="c6n2v8"
+Score → Select → Merge → Update → Repeat
+```
 
 ### Mental Model
 
-```text id="z5q2m8"
-Large Candidate Vocabulary
-          ↓
-     Probabilities
-          ↓
- Best Segmentations
-          ↓
-    Evaluate Tokens
-          ↓
-     Remove Weak Ones
-          ↓
-        Repeat
-          ↓
-   Final Vocabulary
+```text id="m7q3x9"
+Small Vocabulary
+      ↓
+Score Pairs
+      ↓
+Best Pair
+      ↓
+Merge
+      ↓
+New Token
+      ↓
+Repeat
+      ↓
+Final Vocabulary
 ```
 
-> **Unigram = probabilistic tokenization + vocabulary pruning.**
+> **WordPiece = score-based merging during training + longest-match tokenization.**
