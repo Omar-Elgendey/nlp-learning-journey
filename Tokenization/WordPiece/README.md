@@ -1,920 +1,591 @@
-# Byte Pair Encoding (BPE)
+# WordPiece
 
-## 1. Overview
+## 1. What is WordPiece?
 
-Byte Pair Encoding (BPE) is a **subword tokenization algorithm**.
+WordPiece is a **subword tokenization algorithm** used famously in BERT.
 
-Instead of representing text only as complete words or individual characters, BPE learns meaningful and reusable **subword units**.
+Like BPE, it starts with small tokens and builds larger subwords. The main difference is **how it chooses the pair to merge**.
 
-For example:
+### Core idea
 
-```text
-playing
-→ play + ing
+> **Start with small tokens, calculate a score for each adjacent pair, then merge the pair with the highest score.**
+
+The score is:
+
+```text id="5v7q2m"
+                 Frequency(A, B)
+Score = ─────────────────────────────────
+         Frequency(A) × Frequency(B)
 ```
 
-This gives us a balance between:
-
-* **Word-level tokenization**
-
-  * Small number of tokens per sentence
-  * Very large vocabulary
-  * Poor handling of unseen words
-
-* **Character-level tokenization**
-
-  * Very small vocabulary
-  * Can represent almost any word
-  * Produces much longer sequences
-
-BPE tries to find a useful middle ground by learning which character sequences occur frequently enough to become subword tokens.
+So unlike BPE, the most frequent pair is **not necessarily** the best pair.
 
 ---
 
-# 2. Core Idea
+# 2. Training Architecture
 
-The main idea behind BPE is simple:
-
-> **Repeatedly merge the most frequent adjacent pair of tokens.**
-
-Suppose the current representation is:
-
-```text
-h u g
+```text id="9j1p4a"
+                Training Corpus
+                       │
+                       ▼
+                Pre-tokenization
+                       │
+                       ▼
+                 Word Frequencies
+                       │
+                       ▼
+                Initial Vocabulary
+                       │
+                       ▼
+              Initial WordPiece Splits
+                       │
+                       ▼
+             Token & Pair Frequencies
+                       │
+                       ▼
+                Calculate Scores
+                       │
+                       ▼
+              Highest-Scoring Pair
+                       │
+                       ▼
+                    Merge
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+       Add New Token      Update Splits
+              │                 │
+              └────────┬────────┘
+                       ▼
+                 Repeat Loop
+                       │
+                       ▼
+              Target Vocabulary
 ```
 
-and the pair:
+---
 
-```text
-(u, g)
-```
+# 3. Training Pipeline
 
-is very frequent across the corpus.
+### 1. Pre-tokenization
 
-BPE merges it:
+The corpus is first split into words.
 
-```text
-h u g
+```text id="4r8y9c"
+"This is WordPiece."
 ↓
-h ug
+"This" "is" "WordPiece" "."
 ```
 
-Later, if:
+### 2. Word Frequencies
 
-```text
-(h, ug)
+Count how often every word appears.
+
+```text id="k9h6u1"
+hug  → 10
+pug  → 5
+pun  → 12
+bun  → 4
+hugs → 5
 ```
 
-becomes the most frequent pair:
+### 3. Initial Vocabulary
 
-```text
-h ug
+WordPiece starts from the characters in the corpus.
+
+But it distinguishes between:
+
+* Characters at the beginning of a word
+* Characters inside a word
+
+Continuation characters get the `##` prefix.
+
+For example:
+
+```text id="q7d3kp"
+hug
 ↓
-hug
+h ##u ##g
 ```
 
-Through many iterations, the tokenizer gradually builds larger and more useful subword units.
+So the vocabulary can contain:
 
----
-
-# 3. BPE Training Pipeline
-
-The complete training process can be visualized as:
-
-```text
-                    RAW CORPUS
-                        │
-                        ▼
-                 PRE-TOKENIZATION
-                        │
-                        ▼
-                  WORD FREQUENCIES
-                        │
-                        ▼
-              INITIAL VOCABULARY
-                  (characters)
-                        │
-                        ▼
-                INITIAL SPLITS
-                        │
-                        ▼
-              COUNT ADJACENT PAIRS
-                        │
-                        ▼
-            FIND MOST FREQUENT PAIR
-                        │
-                        ▼
-                   MERGE PAIR
-                        │
-              ┌─────────┴─────────┐
-              │                   │
-              ▼                   ▼
-       ADD NEW TOKEN        SAVE MERGE RULE
-       TO VOCABULARY
-              │                   │
-              └─────────┬─────────┘
-                        ▼
-                 UPDATE SPLITS
-                        │
-                        ▼
-             RECALCULATE PAIRS
-                        │
-                        ▼
-            FIND NEXT BEST PAIR
-                        │
-                        ▼
-                     REPEAT
-                        │
-                        ▼
-              TARGET VOCAB SIZE
-                        │
-                        ▼
-             TRAINED BPE TOKENIZER
-```
-
-The important thing is that training is **iterative**.
-
-Each iteration follows:
-
-```text
-Count → Select → Merge → Update → Repeat
-```
-
----
-
-# 4. Step 1 — Pre-tokenization
-
-Before learning subwords, the corpus is first divided into smaller units such as words.
-
-For example:
-
-```text
-"This is a tokenizer."
-```
-
-may be pre-tokenized into:
-
-```text
-This
-is
-a
-tokenizer
-.
-```
-
-The exact result depends on the pre-tokenizer being used.
-
-At this stage, we are **not learning subwords yet**.
-
-We are simply preparing the corpus.
-
----
-
-# 5. Step 2 — Word Frequencies
-
-After pre-tokenization, we count how frequently each word appears.
-
-For example:
-
-```text
-hug     → 10
-pug      → 5
-pun     → 12
-bun      → 4
-hugs     → 5
-```
-
-Why do we need word frequencies?
-
-Because pair frequencies are calculated across the entire corpus.
-
-If a word appears 10 times, every pair inside that word contributes 10 occurrences.
-
-For example:
-
-```text
-hug → 10
-```
-
-contains:
-
-```text
-(h, u)
-(u, g)
-```
-
-So each pair receives a contribution of 10.
-
----
-
-# 6. Step 3 — Initial Vocabulary
-
-BPE starts with a small vocabulary.
-
-In the character-level implementation we studied, the initial vocabulary contains the unique characters found in the corpus.
-
-For example:
-
-```text
-hug
-pug
-pun
-```
-
-initially use:
-
-```text
+```text id="1q0v8c"
 h
-u
-g
-p
-n
+##u
+##g
 ```
 
-At this point, BPE has no large subword tokens such as:
+Special tokens such as:
 
-```text
-hug
-pu
-un
+```text id="g6b2pl"
+[PAD] [UNK] [CLS] [SEP] [MASK]
 ```
 
-Those will be learned through the merging process.
+can also be added.
 
 ---
 
-# 7. Step 4 — Initial Splits
+# 4. Initial Splits
 
-Every word is initially split into its individual characters.
+Every word starts as individual WordPiece tokens.
 
 For example:
 
-```text
+```text id="6h4s9q"
 hug
-```
+→ [h, ##u, ##g]
 
-becomes:
-
-```text
-h u g
-```
-
-and:
-
-```text
 hugs
+→ [h, ##u, ##g, ##s]
 ```
 
-becomes:
+The `##` means:
 
-```text
-h u g s
-```
-
-This gives BPE a starting point from which it can learn larger units.
+> **This token is a continuation of the same word.**
 
 ---
 
-# 8. Step 5 — Count Adjacent Pair Frequencies
+# 5. Calculate Pair Scores
 
-Now BPE looks at every pair of neighboring tokens.
-
-For:
-
-```text
-h u g
-```
-
-the adjacent pairs are:
-
-```text
-(h, u)
-(u, g)
-```
+WordPiece looks at every adjacent pair.
 
 For:
 
-```text
-h u g s
+```text id="4z3v1n"
+[h, ##u, ##g]
 ```
 
 the pairs are:
 
-```text
-(h, u)
-(u, g)
-(g, s)
+```text id="v4m7t8"
+(h, ##u)
+(##u, ##g)
 ```
 
-The frequencies of the words are used when calculating the total pair frequency.
+For each pair we calculate:
 
-For example:
-
-```text
-hug  → 10
-hugs → 5
+```text id="b2q8n0"
+                 Pair Frequency
+Score = ─────────────────────────────────
+         Frequency(A) × Frequency(B)
 ```
 
-Both contain:
+The idea is that a pair should not get a high score **just because its individual tokens are extremely common**.
 
-```text
-(u, g)
+So WordPiece considers both:
+
+```text id="0pl5xw"
+How often the pair appears
++
+How common its individual parts are
 ```
-
-so the pair frequency becomes:
-
-```text
-(u, g) → 15
-```
-
-This is how BPE determines which combinations are common across the corpus.
 
 ---
 
-# 9. Step 6 — Select the Best Pair
+# 6. Select the Best Pair
 
-BPE uses a very simple selection rule:
+After calculating all scores, WordPiece selects:
 
-> **Choose the most frequent adjacent pair.**
+> **The pair with the highest score.**
 
 For example:
 
-```text
-(u, g) → 20
-(p, u) → 16
-(h, u) → 15
-(g, s) → 5
+```text id="8z3j1n"
+(h, ##u)       → 1/36
+(##u, ##g)     → 1/36
+(##g, ##s)     → 1/20
 ```
 
-The selected pair is:
+The highest score is:
 
-```text
-(u, g)
+```text id="t5f7j2"
+(##g, ##s)
 ```
 
-because it has the highest frequency.
+so that pair is selected.
 
-### Important intuition
+This is the main difference from BPE:
 
-BPE does not ask:
+```text id="1q6m4x"
+BPE
+→ highest frequency
 
-> "Is this pair special?"
-
-It mainly asks:
-
-> **"How often does this pair occur?"**
-
-That is the core difference between BPE and WordPiece.
+WordPiece
+→ highest score
+```
 
 ---
 
-# 10. Step 7 — Merge the Pair
+# 7. Merge the Pair
 
-Suppose:
+Suppose the selected pair is:
 
-```text
-(u, g)
+```text id="w4n9p2"
+(##g, ##s)
 ```
 
-was selected.
+It becomes:
 
-BPE merges the two tokens:
-
-```text
-u g
-↓
-ug
+```text id="2x6c8v"
+##gs
 ```
 
-Therefore:
+Notice that the `##` prefix is kept only once.
 
-```text
-h u g
+For example:
+
+```text id="a8f4m3"
+h ##u ##g ##s
 ```
 
 becomes:
 
-```text
-h ug
+```text id="v6k2q9"
+h ##u ##gs
 ```
 
-And:
-
-```text
-h u g s
-```
-
-becomes:
-
-```text
-h ug s
-```
-
-The newly created token:
-
-```text
-ug
-```
-
-is added to the vocabulary.
+The new token is added to the vocabulary.
 
 ---
 
-# 11. Step 8 — Save the Merge Rule
+# 8. Update the Splits
 
-BPE also remembers the merge that it learned.
-
-For example:
-
-```text
-(u, g) → ug
-```
-
-Later, it might learn:
-
-```text
-(h, ug) → hug
-```
-
-The order matters.
-
-Conceptually, the tokenizer learns something like:
-
-```text
-1. (u, g) → ug
-2. (h, ug) → hug
-3. ...
-```
-
-These learned merge rules are used later when tokenizing new text.
-
-This is one of the most important characteristics of BPE.
-
----
-
-# 12. Step 9 — Update the Corpus Representation
-
-After a merge, every affected word must be updated.
+After the merge, all affected word splits are updated.
 
 Before:
 
-```text
-hug
-→ h u g
-
-hugs
-→ h u g s
+```text id="q5t7n1"
+h ##u ##g ##s
 ```
 
-After merging `(u, g)`:
+After:
 
-```text
-hug
-→ h ug
-
-hugs
-→ h ug s
+```text id="z8r3m4"
+h ##u ##gs
 ```
 
-The next iteration works on these updated splits.
+The next iteration uses these updated splits to calculate new frequencies and scores.
 
 ---
 
-# 13. Step 10 — Repeat
+# 9. Main Training Loop
 
-The process continues.
+The entire WordPiece training loop can be summarized as:
 
-```text
-Count pair frequencies
-        ↓
-Select most frequent pair
-        ↓
-Merge pair
-        ↓
-Add new token
-        ↓
-Save merge rule
-        ↓
-Update word representations
-        ↓
+```text id="k2m8x4"
+while vocabulary < target_size:
+
+    Calculate pair scores
+
+    Find highest-scoring pair
+
+    Merge the pair
+
+    Add new token to vocabulary
+
+    Update word splits
+```
+
+So:
+
+```text id="n7q1b5"
+Calculate
+    ↓
+Select
+    ↓
+Merge
+    ↓
+Update
+    ↓
 Repeat
 ```
 
-The algorithm stops when the vocabulary reaches the desired size.
+The difference from BPE is mainly the **selection step**.
 
-For example:
+---
 
-```text
-Initial vocabulary
-      +
-Learned tokens
-      =
-Target vocabulary size
+# 10. Important Implementation Parts
+
+### `word_freqs`
+
+Stores the frequency of every word.
+
+```text id="v3q8n2"
+hug → 10
+pug → 5
+```
+
+### `splits`
+
+Stores the current WordPiece representation.
+
+Initially:
+
+```text id="r4x9m1"
+hug → [h, ##u, ##g]
+```
+
+After merging:
+
+```text id="d7k2p5"
+hug → [hu, ##g]
+```
+
+### `compute_pair_scores()`
+
+Calculates:
+
+* Individual token frequencies
+* Pair frequencies
+* Score for every pair
+
+Conceptually:
+
+```text id="y5m3q8"
+Count tokens
+      ↓
+Count pairs
+      ↓
+Calculate score
+```
+
+### `merge_pair()`
+
+Applies the selected merge to the current word splits.
+
+```text id="p4x7n2"
+[h, ##u, ##g]
+```
+
+merge:
+
+```text id="m8q1v6"
+(h, ##u)
+```
+
+becomes:
+
+```text id="c3z5r9"
+[hu, ##g]
 ```
 
 ---
 
-# 14. Worked Example
+# 11. Tokenization Pipeline
 
-Consider:
+Training and tokenization work differently.
 
-```text
-hug   → 10
-pug    → 5
-pun   → 12
-bun    → 4
-hugs   → 5
+After training, WordPiece keeps the **final vocabulary**.
+
+To tokenize a new word:
+
+```text id="j6w2k8"
+New Word
+   ↓
+Start from the beginning
+   ↓
+Find the longest vocabulary token
+   ↓
+Split it
+   ↓
+Search for the longest continuation token
+   ↓
+Repeat
+   ↓
+Complete word?
 ```
 
-Initial splits:
+The key idea is:
 
-```text
-h u g       ×10
-p u g        ×5
-p u n       ×12
-b u n        ×4
-h u g s      ×5
-```
-
-Some pair frequencies might be:
-
-```text
-(h, u) → 15
-(u, g) → 20
-(p, u) → 17
-(u, n) → 16
-(g, s) → 5
-```
-
-The most frequent pair is:
-
-```text
-(u, g)
-```
-
-So we merge:
-
-```text
-u g
-↓
-ug
-```
-
-The corpus representation becomes:
-
-```text
-h ug       ×10
-p ug        ×5
-p u n      ×12
-b u n       ×4
-h ug s      ×5
-```
-
-Now we recalculate pair frequencies.
-
-The newly created token `ug` can participate in new pairs:
-
-```text
-(h, ug)
-(p, ug)
-(ug, s)
-```
-
-The process continues until the target vocabulary size is reached.
+> **WordPiece uses a longest-match strategy.**
 
 ---
 
-# 15. What Does BPE Actually Learn?
+# 12. Example — `hugs`
 
-After training, BPE has learned two important things:
+Suppose the vocabulary contains:
 
-### 1. Vocabulary
-
-The tokens that the tokenizer knows.
-
-For example:
-
-```text
-h
-u
-g
-ug
+```text id="r5q8m2"
 hug
-...
-```
-
-### 2. Ordered Merge Rules
-
-The sequence of merges learned during training.
-
-For example:
-
-```text
-(u, g) → ug
-(h, ug) → hug
-```
-
-The merge rules tell the tokenizer **how the vocabulary was constructed and how to tokenize new text**.
-
----
-
-# 16. BPE Tokenization Pipeline
-
-Training is only half of the story.
-
-Once the tokenizer has been trained, it can tokenize new text.
-
-The inference pipeline is:
-
-```text
-                    NEW TEXT
-                       │
-                       ▼
-                PRE-TOKENIZATION
-                       │
-                       ▼
-               INITIAL SYMBOLS
-                       │
-                       ▼
-             APPLY LEARNED MERGES
-                       │
-                       ▼
-              MERGE ACCORDING
-                 TO THEIR ORDER
-                       │
-                       ▼
-                FINAL TOKENS
-                       │
-                       ▼
-                  TOKEN IDs
-```
-
-So there are two different stages:
-
-```text
-Training
-→ Learn vocabulary + merge rules
-
-Tokenization
-→ Use the learned information
-```
-
----
-
-# 17. Example — Tokenizing `hugs`
-
-Suppose training learned:
-
-```text
-(u, g) → ug
-(h, ug) → hug
+hu
+##g
+##s
+##gs
 ```
 
 Start with:
 
-```text
-h u g s
+```text id="n3v7x1"
+hugs
 ```
 
-Apply the first merge:
+Possible matches at the beginning:
 
-```text
-h ug s
+```text id="q8m4k2"
+h
+hu
+hug
 ```
 
-Apply the next merge:
+The longest valid match is:
 
-```text
-hug s
+```text id="a5x9p3"
+hug
 ```
 
-Final tokenization:
+So:
 
-```text
-["hug", "s"]
+```text id="z7c2n6"
+hugs
+→ hug + s
 ```
 
-The important idea is:
+The remaining part becomes a continuation:
 
-> BPE tokenization follows the learned merge rules rather than searching for the longest possible vocabulary match.
+```text id="f4m8q1"
+##s
+```
+
+Therefore:
+
+```text id="w6r3t9"
+hugs
+→ ["hug", "##s"]
+```
 
 ---
 
-# 18. BPE and Vocabulary Growth
+# 13. `[UNK]` Behavior
 
-The vocabulary grows gradually.
+WordPiece requires the **whole word** to be tokenizable.
 
-For example:
+Suppose:
 
-```text
-Initial vocabulary
-        ↓
-Characters
-        ↓
-Add "ug"
-        ↓
-Add "pu"
-        ↓
-Add "hug"
-        ↓
-Add more subwords
-        ↓
-Target vocabulary size
+```text id="q3m7x9"
+bum
 ```
 
-This gradual growth allows BPE to discover useful patterns in the corpus.
+can start with:
 
-Frequent character combinations tend to become reusable subword tokens.
+```text id="j8k2p4"
+b
+##u
+```
+
+but there is no valid token for:
+
+```text id="v5n1r6"
+##m
+```
+
+WordPiece does not return:
+
+```text id="z4c8t2"
+[b, ##u, [UNK]]
+```
+
+Instead, the entire word becomes:
+
+```text id="m6q9w3"
+[UNK]
+```
+
+So:
+
+```text id="y7p2k5"
+Complete word can be represented
+→ return tokens
+
+Cannot complete the word
+→ [UNK]
+```
 
 ---
 
-# 19. Why BPE Works
+# 14. BPE vs WordPiece
 
-BPE works because natural language contains many recurring patterns.
+The training process looks similar:
 
-For example, words may share:
-
-```text
-play
-playing
-played
-player
-```
-
-Instead of learning every word independently, a subword tokenizer can learn reusable pieces such as:
-
-```text
-play
-ing
-ed
-er
-```
-
-This allows related words to share tokens.
-
-It also helps represent words that were not explicitly seen during training.
-
----
-
-# 20. Important Distinction: Word-Level vs Subword-Level
-
-### Word-level
-
-```text
-playing → playing
-```
-
-Requires the complete word to exist in the vocabulary.
-
-### Character-level
-
-```text
-playing → p l a y i n g
-```
-
-Can represent almost anything, but creates long sequences.
-
-### BPE
-
-```text
-playing → play + ing
-```
-
-Attempts to capture useful recurring subword patterns.
-
----
-
-# 21. BPE From-Scratch Mental Model
-
-The implementation we built can be understood as:
-
-```text
-Corpus
-   ↓
-word_freqs
-   ↓
-initial splits
-   ↓
-pair frequencies
-   ↓
-best pair
-   ↓
-merge
-   ↓
-new vocabulary token
-   ↓
-saved merge rule
-   ↓
-updated splits
-   ↓
-repeat
-```
-
-Each component has one main responsibility:
-
-| Component        | Purpose                             |
-| ---------------- | ----------------------------------- |
-| Word frequencies | How often each word occurs          |
-| Initial splits   | Current representation of each word |
-| Pair frequencies | How often each adjacent pair occurs |
-| Best pair        | Most frequent pair                  |
-| Merge            | Combine two tokens                  |
-| Vocabulary       | Store learned tokens                |
-| Merge rules      | Remember learned merge order        |
-
----
-
-# 22. BPE vs WordPiece — Core Difference
-
-The biggest conceptual difference is **how they choose the next pair**.
-
-### BPE
-
-```text
-Pair Score = Pair Frequency
-```
-
-It selects:
-
-> **The most frequent pair.**
-
-### WordPiece
-
-```text
-Pair Score =
-Pair Frequency
-────────────────────────────
-Frequency(A) × Frequency(B)
-```
-
-It selects:
-
-> **The pair with the highest score.**
-
-This means a pair being very common does **not necessarily make it the best WordPiece merge**.
-
-WordPiece tries to favor pairs that are frequent relative to how frequent their individual components already are.
-
----
-
-# 23. Key Takeaways
-
-* BPE is a **subword tokenization algorithm**.
-* It starts from small units and gradually builds larger tokens.
-* Initial splits are usually character-based in the implementation studied here.
-* Word frequencies are used to calculate corpus-level pair frequencies.
-* BPE counts **adjacent token pairs**.
-* It selects the **most frequent pair**.
-* The selected pair is merged into a new token.
-* The new token is added to the vocabulary.
-* The merge rule is saved.
-* The word representations are updated.
-* The process repeats until the target vocabulary size is reached.
-* BPE training produces a vocabulary and ordered merge rules.
-* During tokenization, BPE applies the learned merge rules.
-* BPE focuses primarily on **pair frequency**.
-
----
-
-# 24. One-Minute Mental Model
-
-If you forget everything else:
-
-```text
-BPE TRAINING
-
-Start with characters
-        ↓
-Count adjacent pairs
-        ↓
-Pick the most frequent pair
-        ↓
-Merge it
-        ↓
-Add the new token
-        ↓
-Save the merge rule
-        ↓
-Update the corpus representation
-        ↓
+```text id="h2k7m4"
+Initial Vocabulary
+       ↓
+Find Pair
+       ↓
+Merge
+       ↓
+Update
+       ↓
 Repeat
 ```
 
-Then:
+But the pair selection is different.
 
-```text
-BPE TOKENIZATION
+### BPE
 
-New text
-   ↓
-Initial symbols
-   ↓
-Apply learned merge rules
-   ↓
-Final subword tokens
+```text id="x5q8m2"
+Most frequent pair
 ```
 
-### The core idea
+### WordPiece
 
-> **BPE learns subwords by repeatedly merging the most frequent adjacent pair.**
+```text id="p3n7r1"
+Highest-scoring pair
+```
 
+WordPiece score:
+
+```text id="k9v2d6"
+                 Pair Frequency
+Score = ─────────────────────────────────
+         Frequency(A) × Frequency(B)
+```
+
+And tokenization is also different:
+
+```text id="z4m8q1"
+BPE
+→ Apply learned merge rules
+
+WordPiece
+→ Longest vocabulary match
+```
+
+---
+
+# 15. Key Takeaways
+
+* WordPiece is a **subword tokenizer**.
+* It starts with characters and builds larger subwords.
+* Continuation tokens use the `##` prefix.
+* It calculates a score for every adjacent pair.
+* The **highest-scoring pair** is merged.
+* The vocabulary grows after every merge.
+* The process repeats until the target vocabulary size.
+* During tokenization, WordPiece uses the **longest matching subword**.
+* If a word cannot be completely represented, it becomes `[UNK]`.
+* The main training loop is:
+
+```text id="c6n2v8"
+Score → Select → Merge → Update → Repeat
+```
+
+### Mental Model
+
+```text id="m7q3x9"
+Small Vocabulary
+      ↓
+Score Pairs
+      ↓
+Best Pair
+      ↓
+Merge
+      ↓
+New Token
+      ↓
+Repeat
+      ↓
+Final Vocabulary
+```
+
+> **WordPiece = score-based merging during training + longest-match tokenization.**
