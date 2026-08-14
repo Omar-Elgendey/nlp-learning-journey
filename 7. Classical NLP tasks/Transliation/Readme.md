@@ -4,7 +4,7 @@
 
 This notebook covers **Machine Translation** using MarianMT.
 
-The goal is to understand how Encoder-Decoder models translate text between languages and how to fine-tune a pretrained model on a translation dataset.
+The goal is to understand how Encoder-Decoder models translate text between languages and how to fine-tune a pretrained translation model on a translation dataset.
 
 ---
 
@@ -12,11 +12,9 @@ The goal is to understand how Encoder-Decoder models translate text between lang
 
 We use the **KDE4** dataset.
 
-The dataset contains:
-
 ```
 Source Sentence
-+
+        +
 Target Sentence
 ```
 
@@ -34,14 +32,12 @@ Par défaut, développer les fils de discussion
 
 ## 2. Tokenization
 
-Both source and target texts must be tokenized.
-
 ```
-English Sentence
+Source Sentence
         ↓
 input_ids
 
-French Sentence
+Target Sentence
         ↓
 labels
 ```
@@ -52,33 +48,25 @@ The target text is processed using:
 text_target
 ```
 
-to ensure correct tokenization for the output language.
-
 ---
 
-## 3. Model
-
-We fine-tune:
+## 3. Architecture
 
 ```
+Source Text
+      ↓
 Encoder
-    ↓
-Context Representation
-    ↓
+      ↓
+Hidden Representations
+      ↓
+Attention
+      ↓
 Decoder
-    ↓
+      ↓
 Translated Text
 ```
 
-using a pretrained MarianMT model.
-
-During training, the decoder receives:
-
-```
-decoder_input_ids
-```
-
-which are shifted versions of the target labels.
+The encoder understands the source sentence while the decoder generates the target sentence token by token.
 
 ---
 
@@ -91,40 +79,64 @@ Tokenization
       ↓
 Preprocessing
       ↓
-Data Collator
+DataCollatorForSeq2Seq
       ↓
-Encoder-Decoder Model
+MarianMT
       ↓
-Fine-tuning
+Seq2SeqTrainer
       ↓
 Evaluation
 ```
 
-Training is performed using:
+During training:
 
 ```
-Seq2SeqTrainer
+labels
+    ↓
+Shift Right
+    ↓
+decoder_input_ids
 ```
+
+Teacher Forcing is used, meaning the decoder receives the correct previous target token during training.
 
 ---
 
 ## 5. Evaluation
 
-Translations are generated using:
-
 ```
 generate()
-```
-
-and evaluated using:
-
-```
+      ↓
+Predicted Translation
+      ↓
 SacreBLEU
+```
+
+SacreBLEU measures translation quality by comparing generated translations with reference translations.
+
+---
+
+## 6. Inference Pipeline
+
+```
+Source Sentence
+        ↓
+Tokenizer
+        ↓
+Encoder
+        ↓
+Attention
+        ↓
+Decoder
+        ↓
+generate()
+        ↓
+Decoded Translation
 ```
 
 ---
 
-## 6. Data Collation
+## 7. Data Collation
 
 `DataCollatorForSeq2Seq` handles:
 
@@ -146,14 +158,16 @@ so they are ignored during loss computation.
 
 ## Key Takeaways
 
-- Machine Translation is a Sequence-to-Sequence task.
+- Machine Translation is a Seq2Seq task.
 - Inputs are stored as `input_ids`.
 - Targets are stored as `labels`.
-- `decoder_input_ids` are shifted versions of the labels.
+- `text_target` simplifies target tokenization.
+- `decoder_input_ids` are shifted labels.
 - Teacher Forcing is used during training.
+- MarianMT uses an Encoder-Decoder architecture.
 - `DataCollatorForSeq2Seq` prepares batches automatically.
-- `Seq2SeqTrainer` uses `generate()` during evaluation.
-- SacreBLEU is a common metric for translation quality.
+- `Seq2SeqTrainer` handles training and evaluation.
+- SacreBLEU is the standard translation metric.
 
 ### Mental Model
 
@@ -163,6 +177,8 @@ English Text
 Tokenization
       ↓
 Encoder
+      ↓
+Attention
       ↓
 Decoder
       ↓
