@@ -1,1 +1,333 @@
 
+# Full Training Loop and Trainer API
+
+## Overview
+
+When training or fine-tuning Transformer models, there are two main approaches:
+
+1. **Full Training Loop** – manually controlling every stage of training.
+2. **Trainer API** – using Hugging Face's built-in training framework.
+
+Both approaches train the same model, but they differ in control, flexibility, and development speed.
+
+---
+
+# Architecture
+
+```text
+Raw Dataset
+      │
+      ▼
+Tokenizer
+      │
+      ▼
+Tokenized Dataset
+      │
+      ▼
+Data Collator
+      │
+      ▼
+Batches
+      │
+      ▼
+Transformer Model
+      │
+      ▼
+Loss Function
+      │
+      ▼
+Backpropagation
+      │
+      ▼
+Optimizer
+      │
+      ▼
+Updated Weights
+```
+
+The only difference between Full Training Loop and Trainer API is **who manages the training process**.
+
+* Full Loop → You manage everything.
+* Trainer API → Hugging Face manages most components.
+
+---
+
+# Full Training Loop
+
+## What is it?
+
+A manual implementation of the training process using PyTorch.
+
+You explicitly control:
+
+* Data loading
+* Forward pass
+* Loss calculation
+* Backward pass
+* Optimizer updates
+* Learning rate scheduling
+* Evaluation
+* Checkpoint saving
+
+---
+
+## Pipeline
+
+```text
+Dataset
+   ↓
+Tokenizer
+   ↓
+Tokenized Dataset
+   ↓
+DataLoader
+   ↓
+Batch
+   ↓
+Model Forward Pass
+   ↓
+Loss Computation
+   ↓
+Backward Pass
+   ↓
+Optimizer Step
+   ↓
+Learning Rate Scheduler
+   ↓
+Evaluation
+   ↓
+Save Model
+```
+
+---
+
+## Core Components
+
+### Dataset
+
+Stores training examples.
+
+### Tokenizer
+
+Converts text into token IDs understandable by the model.
+
+### DataLoader
+
+Creates mini-batches and feeds them to the model.
+
+### Model
+
+Performs predictions.
+
+### Loss Function
+
+Measures prediction error.
+
+### Optimizer
+
+Updates model weights.
+
+### Scheduler
+
+Adjusts learning rate during training.
+
+---
+
+## Advantages
+
+* Full control.
+* Easier to customize.
+* Suitable for research.
+* Supports custom training strategies.
+
+---
+
+## Disadvantages
+
+* More code.
+* More complexity.
+* Easier to make mistakes.
+
+---
+
+# Trainer API
+
+## What is it?
+
+A high-level Hugging Face abstraction that automates the training loop.
+
+Instead of manually handling training operations, Trainer manages them internally.
+
+---
+
+## Pipeline
+
+```text
+Dataset
+   ↓
+Tokenizer
+   ↓
+Tokenized Dataset
+   ↓
+TrainingArguments
+   ↓
+Trainer
+   ↓
+Automatic Training Loop
+   ↓
+Evaluation
+   ↓
+Checkpoint Saving
+   ↓
+Trained Model
+```
+
+---
+
+## Architecture
+
+```text
+Model
+   │
+TrainingArguments
+   │
+Train Dataset
+   │
+Eval Dataset
+   │
+Trainer
+   │
+   ├── Data Loading
+   ├── Forward Pass
+   ├── Loss Calculation
+   ├── Backward Pass
+   ├── Optimizer Step
+   ├── Scheduler Step
+   ├── Logging
+   ├── Evaluation
+   └── Checkpoint Saving
+```
+
+Everything inside Trainer is automatically managed.
+
+---
+
+## Main Components
+
+### Model
+
+Transformer model to train.
+
+### Dataset
+
+Training and evaluation data.
+
+### TrainingArguments
+
+Configuration object controlling the training process.
+
+### Trainer
+
+Central class that orchestrates the entire training workflow.
+
+---
+
+# TrainingArguments
+
+Defines training settings.
+
+Common parameters:
+
+| Parameter                   | Purpose               |
+| --------------------------- | --------------------- |
+| output_dir                  | Save location         |
+| num_train_epochs            | Number of epochs      |
+| learning_rate               | Learning rate         |
+| per_device_train_batch_size | Training batch size   |
+| per_device_eval_batch_size  | Evaluation batch size |
+| weight_decay                | Regularization        |
+| logging_steps               | Logging frequency     |
+| save_strategy               | Saving frequency      |
+| eval_strategy               | Evaluation frequency  |
+
+---
+
+# What Trainer Automates
+
+Without Trainer, you manually implement:
+
+```text
+DataLoader
+Forward Pass
+Loss Calculation
+Backward Pass
+Optimizer Step
+Scheduler Step
+Evaluation Loop
+Logging
+Checkpoint Saving
+Best Model Loading
+```
+
+Trainer automatically handles all of these.
+
+---
+
+# Full Training Loop vs Trainer API
+
+| Feature           | Full Loop | Trainer  |
+| ----------------- | --------- | -------- |
+| Code Required     | High      | Low      |
+| Control           | Maximum   | Moderate |
+| Flexibility       | Very High | High     |
+| Development Speed | Slower    | Faster   |
+| Research Usage    | Excellent | Good     |
+| Beginner Friendly | No        | Yes      |
+
+---
+
+# End-to-End Flow
+
+```text
+Raw Text
+   ↓
+Tokenizer
+   ↓
+Token IDs
+   ↓
+Dataset
+   ↓
+Batches
+   ↓
+Transformer Model
+   ↓
+Predictions
+   ↓
+Loss
+   ↓
+Backpropagation
+   ↓
+Weight Updates
+   ↓
+Fine-Tuned Model
+```
+
+Whether using a Full Training Loop or Trainer API, this fundamental pipeline remains the same.
+
+---
+
+# Key Takeaway
+
+**Full Training Loop**
+
+* Maximum control.
+* More code.
+* Best for custom research and experimentation.
+
+**Trainer API**
+
+* Minimal code.
+* Faster development.
+* Best choice for most Hugging Face fine-tuning tasks.
+
+The underlying training process is identical; Trainer simply automates the infrastructure around it.
